@@ -17,6 +17,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 
 	"github.com/fatedier/frp/pkg/config"
 	"github.com/fatedier/frp/pkg/consts"
@@ -331,5 +332,104 @@ func (svr *Service) APIProxyTraffic(w http.ResponseWriter, r *http.Request) {
 	trafficResp.TrafficOut = proxyTrafficInfo.TrafficOut
 
 	buf, _ := json.Marshal(&trafficResp)
+	res.Msg = string(buf)
+}
+
+type ClientProxyInfo struct {
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	LocalIP    string `json:"local_ip"`
+	LocalPort  int    `json:"local_port"`
+	RemotePort int    `json:"remote_port,omitempty"`
+	Status     string `json:"status"`
+}
+
+type ClientDetailInfo struct {
+	RunID    string            `json:"run_id"`
+	User     string            `json:"user"`
+	Version  string            `json:"version"`
+	Hostname string            `json:"hostname"`
+	OS       string            `json:"os"`
+	Arch     string            `json:"arch"`
+	ClientIP string            `json:"client_ip"`
+	Proxies  []ClientProxyInfo `json:"proxies"`
+}
+
+type GetClientsResp struct {
+	Clients []ClientDetailInfo `json:"clients"`
+}
+
+// api/clients
+func (svr *Service) APIClients(w http.ResponseWriter, r *http.Request) {
+	res := GeneralResponse{Code: 200}
+	defer func() {
+		log.Info("Http response [%s]: code [%d]", r.URL.Path, res.Code)
+		w.WriteHeader(res.Code)
+		if len(res.Msg) > 0 {
+			w.Write([]byte(res.Msg))
+		}
+	}()
+	log.Info("Http request: [%s]", r.URL.Path)
+
+	clientsResp := GetClientsResp{}
+	ctls := svr.ctlManager.List()
+	for _, ctl := range ctls {
+		loginMsg := ctl.GetLoginMsg()
+		if loginMsg == nil {
+			continue
+		}
+		clientInfo := ClientDetailInfo{
+			RunID:    loginMsg.RunID,
+			User:     loginMsg.User,
+			Version:  loginMsg.Version,
+			Hostname: loginMsg.Hostname,
+			OS:       loginMsg.Os,
+			Arch:     loginMsg.Arch,
+			ClientIP: ctl.GetRemoteAddr(),
+		}
+
+		proxies := ctl.GetProxies()
+		clientInfo.Proxies = make([]ClientProxyInfo, 0, len(proxies))
+		for name, pxy := range proxies {
+			conf := pxy.GetConf()
+			baseInfo := conf.GetBaseInfo()
+
+			proxyInfo := ClientProxyInfo{
+				Name:      name,
+				Type:      baseInfo.ProxyType,
+				LocalIP:   baseInfo.LocalIP,
+				LocalPort: baseInfo.LocalPort,
+				Status:    consts.Online,
+			}
+
+			// Extract RemotePort for TCP/UDP proxies
+			if tcpConf, ok := conf.(*config.TCPProxyConf); ok {
+				proxyInfo.RemotePort = tcpConf.RemotePort
+			} else if udpConf, ok := conf.(*config.UDPProxyConf); ok {
+				proxyInfo.RemotePort = udpConf.RemotePort
+			}
+
+			clientInfo.Proxies = append(clientInfo.Proxies, proxyInfo)
+		}
+
+		sort.Slice(clientInfo.Proxies, func(i, j int) bool {
+			return clientInfo.Proxies[i].Name < clientInfo.Proxies[j].Name
+		})
+
+		clientsResp.Clients = append(clientsResp.Clients, clientInfo)
+	}
+
+	sort.Slice(clientsResp.Clients, func(i, j int) bool {
+		if clientsResp.Clients[i].User != clientsResp.Clients[j].User {
+			return clientsResp.Clients[i].User < clientsResp.Clients[j].User
+		}
+		return clientsResp.Clients[i].RunID < clientsResp.Clients[j].RunID
+	})
+
+	if clientsResp.Clients == nil {
+		clientsResp.Clients = make([]ClientDetailInfo, 0)
+	}
+
+	buf, _ := json.Marshal(&clientsResp)
 	res.Msg = string(buf)
 }

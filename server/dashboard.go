@@ -48,6 +48,7 @@ func (svr *Service) RunDashboardServer(address string) (err error) {
 	router.HandleFunc("/api/proxy/{type}", svr.APIProxyByType).Methods("GET")
 	router.HandleFunc("/api/proxy/{type}/{name}", svr.APIProxyByTypeAndName).Methods("GET")
 	router.HandleFunc("/api/traffic/{name}", svr.APIProxyTraffic).Methods("GET")
+	router.HandleFunc("/api/clients", svr.APIClients).Methods("GET")
 	router.HandleFunc("/healthz", svr.Healthz)
 
 	// view

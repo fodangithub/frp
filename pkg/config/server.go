@@ -66,11 +66,11 @@ type ServerCommonConf struct {
 	// HTTP server, in seconds. By default, this value is 60.
 	VhostHTTPTimeout int64 `ini:"vhost_http_timeout" json:"vhost_http_timeout"`
 	// DashboardAddr specifies the address that the dashboard binds to. By
-	// default, this value is "0.0.0.0".
+	// default, this value is "127.0.0.1".
 	DashboardAddr string `ini:"dashboard_addr" json:"dashboard_addr"`
 	// DashboardPort specifies the port that the dashboard listens on. If this
 	// value is 0, the dashboard will not be started. By default, this value is
-	// 0.
+	// 7500.
 	DashboardPort int `ini:"dashboard_port" json:"dashboard_port" validate:"gte=0,lte=65535"`
 	// DashboardUser specifies the username that the dashboard will use for
 	// login.
@@ -180,8 +180,8 @@ func GetDefaultServerConf() ServerCommonConf {
 		VhostHTTPSPort:         0,
 		TCPMuxHTTPConnectPort:  0,
 		VhostHTTPTimeout:       60,
-		DashboardAddr:          "0.0.0.0",
-		DashboardPort:          0,
+		DashboardAddr:          "127.0.0.1",
+		DashboardPort:          7500,
 		DashboardUser:          "",
 		DashboardPwd:           "",
 		EnablePrometheus:       false,

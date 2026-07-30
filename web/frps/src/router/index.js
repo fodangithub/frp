@@ -1,6 +1,7 @@
 import Vue from 'vue'
 import Router from 'vue-router'
 import Overview from '../components/Overview.vue'
+import Clients from '../components/Clients.vue'
 import ProxiesTcp from '../components/ProxiesTcp.vue'
 import ProxiesUdp from '../components/ProxiesUdp.vue'
 import ProxiesHttp from '../components/ProxiesHttp.vue'
@@ -15,6 +16,10 @@ export default new Router({
         path: '/',
         name: 'Overview',
         component: Overview
+    }, {
+        path: '/clients',
+        name: 'Clients',
+        component: Clients
     }, {
         path: '/proxies/tcp',
         name: 'ProxiesTcp',

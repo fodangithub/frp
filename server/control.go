@@ -82,6 +82,16 @@ func (cm *ControlManager) GetByID(runID string) (ctl *Control, ok bool) {
 	return
 }
 
+func (cm *ControlManager) List() []*Control {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	ctls := make([]*Control, 0, len(cm.ctlsByRunID))
+	for _, ctl := range cm.ctlsByRunID {
+		ctls = append(ctls, ctl)
+	}
+	return ctls
+}
+
 type Control struct {
 	// all resource managers and controllers
 	rc *controller.ResourceController
@@ -183,6 +193,30 @@ func NewControl(
 		xl:              xlog.FromContextSafe(ctx),
 		ctx:             ctx,
 	}
+}
+
+// GetLoginMsg returns the login message from the client.
+func (ctl *Control) GetLoginMsg() *msg.Login {
+	return ctl.loginMsg
+}
+
+// GetRemoteAddr returns the remote address of the control connection.
+func (ctl *Control) GetRemoteAddr() string {
+	if ctl.conn != nil {
+		return ctl.conn.RemoteAddr().String()
+	}
+	return ""
+}
+
+// GetProxies returns a snapshot of the client's proxies.
+func (ctl *Control) GetProxies() map[string]proxy.Proxy {
+	ctl.mu.RLock()
+	defer ctl.mu.RUnlock()
+	result := make(map[string]proxy.Proxy, len(ctl.proxies))
+	for k, v := range ctl.proxies {
+		result[k] = v
+	}
+	return result
 }
 
 // Start send a login success message to client and start working.
