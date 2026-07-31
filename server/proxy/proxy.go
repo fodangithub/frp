@@ -122,7 +122,7 @@ func (pxy *BaseProxy) GetWorkConnFromPool(src, dst net.Addr) (workConn net.Conn,
 			dstAddr, dstPortStr, _ = net.SplitHostPort(dst.String())
 			dstPort, _ = strconv.Atoi(dstPortStr)
 		}
-		err := msg.WriteMsg(workConn, &msg.StartWorkConn{
+		err = msg.WriteMsg(workConn, &msg.StartWorkConn{
 			ProxyName: pxy.GetName(),
 			SrcAddr:   srcAddr,
 			SrcPort:   uint16(srcPort),
@@ -133,6 +133,7 @@ func (pxy *BaseProxy) GetWorkConnFromPool(src, dst net.Addr) (workConn net.Conn,
 		if err != nil {
 			xl.Warn("failed to send message to work connection from pool: %v, times: %d", err, i)
 			workConn.Close()
+			workConn = nil
 		} else {
 			break
 		}
@@ -235,6 +236,7 @@ func NewProxy(ctx context.Context, userInfo plugin.UserInfo, rc *controller.Reso
 		pxy = &XTCPProxy{
 			BaseProxy: &basePxy,
 			cfg:       cfg,
+			closeCh:   make(chan struct{}),
 		}
 	case *config.SUDPProxyConf:
 		pxy = &SUDPProxy{
@@ -322,6 +324,13 @@ func (pm *Manager) Add(name string, pxy Proxy) error {
 
 	pm.pxys[name] = pxy
 	return nil
+}
+
+func (pm *Manager) Exist(name string) bool {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	_, ok := pm.pxys[name]
+	return ok
 }
 
 func (pm *Manager) Del(name string) {

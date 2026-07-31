@@ -16,18 +16,18 @@ package proxy
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/fatedier/frp/pkg/config"
 	"github.com/fatedier/frp/pkg/msg"
-
-	"github.com/fatedier/golib/errors"
 )
 
 type XTCPProxy struct {
 	*BaseProxy
 	cfg *config.XTCPProxyConf
 
-	closeCh chan struct{}
+	closeCh   chan struct{}
+	closeOnce sync.Once
 }
 
 func (pxy *XTCPProxy) Run() (remoteAddr string, err error) {
@@ -38,12 +38,15 @@ func (pxy *XTCPProxy) Run() (remoteAddr string, err error) {
 		err = fmt.Errorf("xtcp is not supported in frps")
 		return
 	}
-	sidCh := pxy.rc.NatHoleController.ListenClient(pxy.GetName(), pxy.cfg.Sk)
+	sidCh, err := pxy.rc.NatHoleController.ListenClient(pxy.GetName(), pxy.cfg.Sk)
+	if err != nil {
+		return
+	}
 	go func() {
 		for {
 			select {
 			case <-pxy.closeCh:
-				break
+				return
 			case sidRequest := <-sidCh:
 				sr := sidRequest
 				workConn, errRet := pxy.GetWorkConnFromPool(nil, nil)
@@ -89,9 +92,9 @@ func (pxy *XTCPProxy) GetConf() config.ProxyConf {
 }
 
 func (pxy *XTCPProxy) Close() {
-	pxy.BaseProxy.Close()
-	pxy.rc.NatHoleController.CloseClient(pxy.GetName())
-	errors.PanicToError(func() {
+	pxy.closeOnce.Do(func() {
+		pxy.BaseProxy.Close()
+		pxy.rc.NatHoleController.CloseClient(pxy.GetName())
 		close(pxy.closeCh)
 	})
 }

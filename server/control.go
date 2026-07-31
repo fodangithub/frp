@@ -145,6 +145,8 @@ type Control struct {
 	managerShutdown *shutdown.Shutdown
 	allShutdown     *shutdown.Shutdown
 
+	started bool
+
 	mu sync.RWMutex
 
 	// Server configuration information
@@ -228,11 +230,19 @@ func (ctl *Control) Start() {
 		Error:         "",
 	}
 	msg.WriteMsg(ctl.conn, loginRespMsg)
+	ctl.mu.Lock()
+	ctl.started = true
+	ctl.mu.Unlock()
 
 	go ctl.writer()
-	for i := 0; i < ctl.poolCount; i++ {
-		ctl.sendCh <- &msg.ReqWorkConn{}
-	}
+	go func() {
+		for i := 0; i < ctl.poolCount; i++ {
+			// ignore error here, that means that this control is closed
+			_ = errors.PanicToError(func() {
+				ctl.sendCh <- &msg.ReqWorkConn{}
+			})
+		}
+	}()
 
 	go ctl.manager()
 	go ctl.reader()
@@ -419,6 +429,14 @@ func (ctl *Control) stoper() {
 
 // block until Control closed
 func (ctl *Control) WaitClosed() {
+	ctl.mu.RLock()
+	started := ctl.started
+	ctl.mu.RUnlock()
+
+	if !started {
+		ctl.allShutdown.Done()
+		return
+	}
 	ctl.allShutdown.WaitDone()
 }
 
@@ -551,6 +569,11 @@ func (ctl *Control) RegisterProxy(pxyMsg *msg.NewProxy) (remoteAddr string, err 
 				ctl.mu.Unlock()
 			}
 		}()
+	}
+
+	if ctl.pxyManager.Exist(pxyMsg.ProxyName) {
+		err = fmt.Errorf("proxy [%s] already exists", pxyMsg.ProxyName)
+		return
 	}
 
 	remoteAddr, err = pxy.Run()

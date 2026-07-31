@@ -49,16 +49,19 @@ func NewController(udpBindAddr string) (nc *Controller, err error) {
 	return nc, nil
 }
 
-func (nc *Controller) ListenClient(name string, sk string) (sidCh chan *SidRequest) {
+func (nc *Controller) ListenClient(name string, sk string) (chan *SidRequest, error) {
 	clientCfg := &ClientCfg{
 		Name:  name,
 		Sk:    sk,
 		SidCh: make(chan *SidRequest),
 	}
 	nc.mu.Lock()
+	defer nc.mu.Unlock()
+	if _, ok := nc.clientCfgs[name]; ok {
+		return nil, fmt.Errorf("xtcp proxy [%s] already exists", name)
+	}
 	nc.clientCfgs[name] = clientCfg
-	nc.mu.Unlock()
-	return clientCfg.SidCh
+	return clientCfg.SidCh, nil
 }
 
 func (nc *Controller) CloseClient(name string) {
