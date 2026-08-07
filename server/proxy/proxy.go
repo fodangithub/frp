@@ -177,6 +177,13 @@ func (pxy *BaseProxy) startListenHandler(p Proxy, handler func(Proxy, net.Conn, 
 					xl.Warn("listener is closed: %s", err)
 					return
 				}
+
+				if pxy.rc.BlacklistManager != nil && pxy.rc.BlacklistManager.IsBlacklisted(c.RemoteAddr()) {
+					xl.Warn("blacklist: rejected user connection from %s", c.RemoteAddr().String())
+					c.Close()
+					continue
+				}
+
 				xl.Info("get a user connection [%s]", c.RemoteAddr().String())
 				go handler(p, c, pxy.serverCfg)
 			}

@@ -1,0 +1,6 @@
+[
+  {"cidr": "192.0.2.0/24", "description": "TEST-NET-1 (RFC 5737)"},
+  {"cidr": "198.51.100.0/24", "description": "TEST-NET-2 (RFC 5737)"},
+  {"cidr": "10.0.0.1", "description": "example single IP"},
+  {"cidr": "fd00:abcd::/32", "description": "example IPv6 CIDR"}
+]

@@ -161,6 +161,17 @@ type ServerCommonConf struct {
 	UserConnTimeout int64 `ini:"user_conn_timeout" json:"user_conn_timeout"`
 	// HTTPPlugins specify the server plugins support HTTP protocol.
 	HTTPPlugins map[string]plugin.HTTPPluginOptions `ini:"-" json:"http_plugins"`
+	// BlacklistFilePath specifies the path to a JSON file containing blacklisted IPs/CIDRs.
+	// The JSON should be an array of objects with a "network" field (e.g. {"network": "1.2.3.0/24"}).
+	// By default, this value is "".
+	BlacklistFilePath string `ini:"blacklist_file_path" json:"blacklist_file_path"`
+	// BlacklistURLs specifies a comma-separated list of URLs to fetch blacklist JSON from.
+	// The JSON format should be an array of objects with a "network" field.
+	// By default, this value is "".
+	BlacklistURLs string `ini:"blacklist_urls" json:"blacklist_urls"`
+	// BlacklistRefreshInterval specifies how often to re-fetch the blacklist from URLs, in seconds.
+	// If 0, no automatic refresh occurs. By default, this value is 0.
+	BlacklistRefreshInterval int64 `ini:"blacklist_refresh_interval" json:"blacklist_refresh_interval"`
 	// UDPPacketSize specifies the UDP packet size
 	// By default, this value is 1500
 	UDPPacketSize int64 `ini:"udp_packet_size" json:"udp_packet_size"`
@@ -204,8 +215,11 @@ func GetDefaultServerConf() ServerCommonConf {
 		HeartbeatTimeout:       90,
 		UserConnTimeout:        10,
 		Custom404Page:          "",
-		HTTPPlugins:            make(map[string]plugin.HTTPPluginOptions),
-		UDPPacketSize:          1500,
+		HTTPPlugins:                make(map[string]plugin.HTTPPluginOptions),
+		UDPPacketSize:              1500,
+		BlacklistFilePath:          "",
+		BlacklistURLs:              "",
+		BlacklistRefreshInterval:   0,
 	}
 }
 

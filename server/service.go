@@ -24,10 +24,12 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fatedier/frp/assets"
 	"github.com/fatedier/frp/pkg/auth"
+	"github.com/fatedier/frp/pkg/blacklist"
 	"github.com/fatedier/frp/pkg/config"
 	modelmetrics "github.com/fatedier/frp/pkg/metrics"
 	"github.com/fatedier/frp/pkg/msg"
@@ -95,6 +97,8 @@ type Service struct {
 	tlsConfig *tls.Config
 
 	cfg config.ServerCommonConf
+
+	blacklistManager *blacklist.Manager
 }
 
 func NewService(cfg config.ServerCommonConf) (svr *Service, err error) {
@@ -119,6 +123,27 @@ func NewService(cfg config.ServerCommonConf) (svr *Service, err error) {
 		authVerifier:    auth.NewAuthVerifier(cfg.ServerConfig),
 		tlsConfig:       tlsConfig,
 		cfg:             cfg,
+	}
+
+ 	if cfg.BlacklistFilePath != "" || cfg.BlacklistURLs != "" {
+		var urls []string
+		if cfg.BlacklistURLs != "" {
+			for _, u := range strings.Split(cfg.BlacklistURLs, ",") {
+				u = strings.TrimSpace(u)
+				if u != "" {
+					urls = append(urls, u)
+				}
+			}
+		}
+		refreshInterval := time.Duration(cfg.BlacklistRefreshInterval) * time.Second
+		blManager, err := blacklist.NewManager(cfg.BlacklistFilePath, urls, refreshInterval)
+		if err != nil {
+			log.Warn("Failed to initialize blacklist manager: %v", err)
+		} else {
+			svr.blacklistManager = blManager
+			svr.rc.BlacklistManager = blManager
+			log.Info("blacklist manager initialized")
+		}
 	}
 
 	// Create tcpmux httpconnect multiplexer.
@@ -384,6 +409,13 @@ func (svr *Service) HandleListener(l net.Listener) {
 			log.Warn("Listener for incoming connections from client closed")
 			return
 		}
+
+		if svr.blacklistManager != nil && svr.blacklistManager.IsBlacklisted(c.RemoteAddr()) {
+			log.Warn("blacklist: rejected connection from %s", c.RemoteAddr())
+			c.Close()
+			continue
+		}
+
 		// inject xlog object into net.Conn context
 		xl := xlog.New()
 		ctx := context.Background()
