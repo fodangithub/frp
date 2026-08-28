@@ -22,7 +22,7 @@ func TestIsBlacklisted_JSONArray(t *testing.T) {
 	}
 	defer os.Remove(tmpFile)
 
-	m, err := NewManager(tmpFile, nil, 0)
+	m, err := NewManager(tmpFile, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestIsBlacklisted_NDJSON(t *testing.T) {
 	}
 	defer os.Remove(tmpFile)
 
-	m, err := NewManager(tmpFile, nil, 0)
+	m, err := NewManager(tmpFile, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestIsBlacklisted_NDJSON(t *testing.T) {
 }
 
 func TestEmptyBlacklist(t *testing.T) {
-	m, err := NewManager("", nil, 0)
+	m, err := NewManager("", nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestEmptyBlacklist(t *testing.T) {
 }
 
 func TestMissingFile(t *testing.T) {
-	m, err := NewManager("/nonexistent/blacklist.json", nil, 0)
+	m, err := NewManager("/nonexistent/blacklist.json", nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewManager should not fail on missing file: %v", err)
 	}
@@ -132,11 +132,77 @@ func TestRefreshInterval(t *testing.T) {
 	}
 	defer os.Remove(tmpFile)
 
-	m, err := NewManager(tmpFile, nil, 1*time.Second)
+	m, err := NewManager(tmpFile, nil, nil, 1*time.Second)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
 	defer m.Stop()
+}
+
+func TestAdditionalFiles_MergedAcrossFiles(t *testing.T) {
+	file1 := filepath.Join(os.TempDir(), "blacklist_additional_1.json")
+	file2 := filepath.Join(os.TempDir(), "blacklist_additional_2.json")
+	if err := os.WriteFile(file1, []byte(`[{"network": "203.0.113.0/24"}, {"network": "10.50.0.1"}]`), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	defer os.Remove(file1)
+	if err := os.WriteFile(file2, []byte(`{"cidr":"198.51.100.0/24"}`+"\n"+`{"cidr":"2001:db8:1::/48"}`), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	defer os.Remove(file2)
+
+	m, err := NewManager("", []string{file1, file2}, nil, 0)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer m.Stop()
+
+	tests := []struct {
+		addr     string
+		expected bool
+	}{
+		{"203.0.113.9:8080", true},
+		{"10.50.0.1:8080", true},
+		{"198.51.100.7:8080", true},
+		{"[2001:db8:1::1]:8080", true},
+		{"203.0.114.9:8080", false},
+		{"10.50.0.2:8080", false},
+	}
+
+	for _, tt := range tests {
+		addr, err := net.ResolveTCPAddr("tcp", tt.addr)
+		if err != nil {
+			t.Fatalf("resolve %s: %v", tt.addr, err)
+		}
+		got := m.IsBlacklisted(addr)
+		if got != tt.expected {
+			t.Errorf("IsBlacklisted(%s) = %v, want %v", tt.addr, got, tt.expected)
+		}
+	}
+}
+
+func TestAdditionalFiles_MissingOrMalformedFileSkipped(t *testing.T) {
+	valid := filepath.Join(os.TempDir(), "blacklist_additional_valid.json")
+	malformed := filepath.Join(os.TempDir(), "blacklist_additional_malformed.json")
+	if err := os.WriteFile(valid, []byte(`[{"network": "203.0.113.7"}]`), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	defer os.Remove(valid)
+	if err := os.WriteFile(malformed, []byte(`[{"network": `), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	defer os.Remove(malformed)
+
+	m, err := NewManager("", []string{"/nonexistent/extra.json", malformed, valid}, nil, 0)
+	if err != nil {
+		t.Fatalf("NewManager should not fail on missing/malformed additional files: %v", err)
+	}
+	defer m.Stop()
+
+	blocked, _ := net.ResolveTCPAddr("tcp", "203.0.113.7:8080")
+	if !m.IsBlacklisted(blocked) {
+		t.Error("entries from the valid additional file should be blacklisted")
+	}
 }
 
 func TestMetadataSkipped(t *testing.T) {
@@ -148,7 +214,7 @@ func TestMetadataSkipped(t *testing.T) {
 	}
 	defer os.Remove(tmpFile)
 
-	m, err := NewManager(tmpFile, nil, 0)
+	m, err := NewManager(tmpFile, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}

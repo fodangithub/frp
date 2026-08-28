@@ -16,20 +16,30 @@ import (
 )
 
 type Manager struct {
-	mu       sync.RWMutex
-	networks []*net.IPNet
-	ips      map[string]struct{}
+	mu sync.RWMutex
+
+	// Static entries loaded from additionalFiles at startup. They are merged
+	// into the blacklist once and are never replaced or overwritten.
+	staticIPs      map[string]struct{}
+	staticNetworks []*net.IPNet
+
+	// Dynamic entries, atomically replaced on every successful URL fetch.
+	dynIPs      map[string]struct{}
+	dynNetworks []*net.IPNet
 
 	filePath        string
+	additionalFiles []string
 	refreshURLs     []string
 	refreshInterval time.Duration
 	stopCh          chan struct{}
 }
 
-func NewManager(filePath string, refreshURLs []string, refreshInterval time.Duration) (*Manager, error) {
+func NewManager(filePath string, additionalFiles []string, refreshURLs []string, refreshInterval time.Duration) (*Manager, error) {
 	m := &Manager{
-		ips:             make(map[string]struct{}),
+		staticIPs:       make(map[string]struct{}),
+		dynIPs:          make(map[string]struct{}),
 		filePath:        filePath,
+		additionalFiles: additionalFiles,
 		refreshURLs:     refreshURLs,
 		refreshInterval: refreshInterval,
 		stopCh:          make(chan struct{}),
@@ -38,6 +48,8 @@ func NewManager(filePath string, refreshURLs []string, refreshInterval time.Dura
 	if err := m.loadFromFile(); err != nil {
 		return nil, err
 	}
+
+	m.loadAdditionalFiles()
 
 	if len(m.refreshURLs) > 0 {
 		if err := m.fetchFromURLs(); err != nil {
@@ -70,11 +82,19 @@ func (m *Manager) IsBlacklisted(addr net.Addr) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if _, ok := m.ips[ip.String()]; ok {
+	if _, ok := m.staticIPs[ip.String()]; ok {
+		return true
+	}
+	if _, ok := m.dynIPs[ip.String()]; ok {
 		return true
 	}
 
-	for _, network := range m.networks {
+	for _, network := range m.staticNetworks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	for _, network := range m.dynNetworks {
 		if network.Contains(ip) {
 			return true
 		}
@@ -116,6 +136,9 @@ func (e *blacklistEntry) getNetwork() string {
 	return e.Network
 }
 
+// loadFromFile loads the dynamic blacklist cache file (blacklist_file_path).
+// It only seeds the dynamic set at startup; every successful URL fetch
+// replaces it in memory and rewrites the file.
 func (m *Manager) loadFromFile() error {
 	if m.filePath == "" {
 		return nil
@@ -130,7 +153,60 @@ func (m *Manager) loadFromFile() error {
 		return fmt.Errorf("blacklist: read file %s: %v", m.filePath, err)
 	}
 
-	return m.parseAndApply(data)
+	ips, networks, err := parseEntries(data)
+	if err != nil {
+		return fmt.Errorf("blacklist: parse file %s: %v", m.filePath, err)
+	}
+
+	m.mu.Lock()
+	m.dynIPs = ips
+	m.dynNetworks = networks
+	m.mu.Unlock()
+
+	log.Info("blacklist: loaded %d IPs and %d CIDR ranges from %s", len(ips), len(networks), m.filePath)
+	return nil
+}
+
+// loadAdditionalFiles loads static blacklist entries from all additional
+// files. Entries are merged across files into the static set, which is never
+// replaced or overwritten afterwards. A missing, unreadable or malformed
+// file is logged and skipped so it cannot prevent frps from starting.
+func (m *Manager) loadAdditionalFiles() {
+	if len(m.additionalFiles) == 0 {
+		return
+	}
+
+	staticIPs := make(map[string]struct{})
+	var staticNetworks []*net.IPNet
+
+	for _, path := range m.additionalFiles {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				log.Warn("blacklist: additional file %s not found, skipping", path)
+			} else {
+				log.Warn("blacklist: read additional file %s failed: %v, skipping", path, err)
+			}
+			continue
+		}
+
+		ips, networks, err := parseEntries(data)
+		if err != nil {
+			log.Warn("blacklist: parse additional file %s failed: %v, skipping", path, err)
+			continue
+		}
+
+		for ip := range ips {
+			staticIPs[ip] = struct{}{}
+		}
+		staticNetworks = append(staticNetworks, networks...)
+		log.Info("blacklist: loaded %d IPs and %d CIDR ranges from additional file %s", len(ips), len(networks), path)
+	}
+
+	m.mu.Lock()
+	m.staticIPs = staticIPs
+	m.staticNetworks = staticNetworks
+	m.mu.Unlock()
 }
 
 func (m *Manager) fetchFromURLs() error {
@@ -166,9 +242,15 @@ func (m *Manager) fetchFromURLs() error {
 		return nil
 	}
 
-	if err := m.parseAndApply(allLines); err != nil {
+	ips, networks, err := parseEntries(allLines)
+	if err != nil {
 		return err
 	}
+
+	m.mu.Lock()
+	m.dynIPs = ips
+	m.dynNetworks = networks
+	m.mu.Unlock()
 
 	if m.filePath != "" {
 		if err := os.WriteFile(m.filePath, allLines, 0644); err != nil {
@@ -176,17 +258,19 @@ func (m *Manager) fetchFromURLs() error {
 		}
 	}
 
-	log.Info("blacklist: refreshed from %d URLs", len(m.refreshURLs))
+	log.Info("blacklist: refreshed %d IPs and %d CIDR ranges from %d URLs", len(ips), len(networks), len(m.refreshURLs))
 	return nil
 }
 
-func (m *Manager) parseAndApply(data []byte) error {
+// parseEntries parses blacklist data in JSON array or NDJSON format and
+// returns the contained individual IPs and CIDR networks.
+func parseEntries(data []byte) (map[string]struct{}, []*net.IPNet, error) {
 	var entries []blacklistEntry
 
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) > 0 && trimmed[0] == '[' {
 		if err := json.Unmarshal(trimmed, &entries); err != nil {
-			return fmt.Errorf("blacklist: parse JSON array: %v", err)
+			return nil, nil, fmt.Errorf("parse JSON array: %v", err)
 		}
 	} else {
 		scanner := bufio.NewScanner(bytes.NewReader(data))
@@ -202,12 +286,12 @@ func (m *Manager) parseAndApply(data []byte) error {
 			entries = append(entries, entry)
 		}
 		if err := scanner.Err(); err != nil {
-			return fmt.Errorf("blacklist: read NDJSON: %v", err)
+			return nil, nil, fmt.Errorf("read NDJSON: %v", err)
 		}
 	}
 
-	newIPs := make(map[string]struct{})
-	var newNetworks []*net.IPNet
+	ips := make(map[string]struct{})
+	var networks []*net.IPNet
 
 	for _, entry := range entries {
 		if entry.Type == "metadata" {
@@ -220,23 +304,17 @@ func (m *Manager) parseAndApply(data []byte) error {
 		}
 
 		if _, ipNet, err := net.ParseCIDR(network); err == nil {
-			newNetworks = append(newNetworks, ipNet)
+			networks = append(networks, ipNet)
 			continue
 		}
 
 		if ip := net.ParseIP(network); ip != nil {
-			newIPs[ip.String()] = struct{}{}
+			ips[ip.String()] = struct{}{}
 			continue
 		}
 
 		log.Warn("blacklist: invalid entry %q, skipping", network)
 	}
 
-	m.mu.Lock()
-	m.ips = newIPs
-	m.networks = newNetworks
-	m.mu.Unlock()
-
-	log.Info("blacklist: loaded %d IPs and %d CIDR ranges", len(newIPs), len(newNetworks))
-	return nil
+	return ips, networks, nil
 }

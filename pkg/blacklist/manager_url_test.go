@@ -1,9 +1,12 @@
 package blacklist
 
 import (
+	"bytes"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -34,7 +37,7 @@ func TestFetchFromURLs_SpamhausFormat(t *testing.T) {
 		srv.URL + "/drop_v6.json",
 	}
 
-	m, err := NewManager("", urls, 0)
+	m, err := NewManager("", nil, urls, 0)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
@@ -69,5 +72,78 @@ func TestFetchFromURLs_SpamhausFormat(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("IsBlacklisted(%s) = %v, want %v", tt.addr, got, tt.expected)
 		}
+	}
+}
+
+func TestAdditionalFiles_SurviveURLRefresh(t *testing.T) {
+	// Static entries in additional files must keep being enforced after a
+	// URL fetch replaces the dynamic set, and the additional files must not
+	// be overwritten.
+	additionalContent := []byte(`[{"network": "203.0.113.0/24"}, {"network": "10.50.0.1"}]`)
+	additionalFile := filepath.Join(os.TempDir(), "blacklist_additional_survive.json")
+	if err := os.WriteFile(additionalFile, additionalContent, 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	defer os.Remove(additionalFile)
+
+	cacheFile := filepath.Join(os.TempDir(), "blacklist_cache_survive.json")
+	defer os.Remove(cacheFile)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"cidr":"1.10.16.0/20","sblid":"SBL256894","rir":"apnic"}`))
+	}))
+	defer srv.Close()
+
+	m, err := NewManager(cacheFile, []string{additionalFile}, []string{srv.URL}, 0)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer m.Stop()
+
+	// Re-fetch to simulate a refresh cycle.
+	if err := m.fetchFromURLs(); err != nil {
+		t.Fatalf("fetchFromURLs: %v", err)
+	}
+
+	tests := []struct {
+		addr     string
+		expected bool
+	}{
+		// static entries still enforced after refresh
+		{"203.0.113.9:8080", true},
+		{"10.50.0.1:8080", true},
+		// dynamic entries from the URL
+		{"1.10.20.1:8080", true},
+		// neither
+		{"8.8.8.8:8080", false},
+	}
+
+	for _, tt := range tests {
+		addr, err := net.ResolveTCPAddr("tcp", tt.addr)
+		if err != nil {
+			t.Fatalf("resolve %s: %v", tt.addr, err)
+		}
+		got := m.IsBlacklisted(addr)
+		if got != tt.expected {
+			t.Errorf("IsBlacklisted(%s) = %v, want %v", tt.addr, got, tt.expected)
+		}
+	}
+
+	// The cache file is rewritten with fetched content, but the additional
+	// file must be untouched.
+	cacheContent, err := os.ReadFile(cacheFile)
+	if err != nil {
+		t.Fatalf("read cache file: %v", err)
+	}
+	if !bytes.Contains(cacheContent, []byte("1.10.16.0/20")) {
+		t.Errorf("cache file should contain fetched content, got %q", cacheContent)
+	}
+
+	got, err := os.ReadFile(additionalFile)
+	if err != nil {
+		t.Fatalf("read additional file: %v", err)
+	}
+	if !bytes.Equal(got, additionalContent) {
+		t.Errorf("additional file was modified: got %q, want %q", got, additionalContent)
 	}
 }

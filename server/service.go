@@ -125,7 +125,7 @@ func NewService(cfg config.ServerCommonConf) (svr *Service, err error) {
 		cfg:             cfg,
 	}
 
- 	if cfg.BlacklistFilePath != "" || cfg.BlacklistURLs != "" {
+ 	if cfg.BlacklistFilePath != "" || cfg.BlacklistURLs != "" || cfg.BlacklistAdditionalFiles != "" {
 		var urls []string
 		if cfg.BlacklistURLs != "" {
 			for _, u := range strings.Split(cfg.BlacklistURLs, ",") {
@@ -135,8 +135,17 @@ func NewService(cfg config.ServerCommonConf) (svr *Service, err error) {
 				}
 			}
 		}
+		var additionalFiles []string
+		if cfg.BlacklistAdditionalFiles != "" {
+			for _, f := range strings.Split(cfg.BlacklistAdditionalFiles, ",") {
+				f = strings.TrimSpace(f)
+				if f != "" {
+					additionalFiles = append(additionalFiles, f)
+				}
+			}
+		}
 		refreshInterval := time.Duration(cfg.BlacklistRefreshInterval) * time.Second
-		blManager, err := blacklist.NewManager(cfg.BlacklistFilePath, urls, refreshInterval)
+		blManager, err := blacklist.NewManager(cfg.BlacklistFilePath, additionalFiles, urls, refreshInterval)
 		if err != nil {
 			log.Warn("Failed to initialize blacklist manager: %v", err)
 		} else {

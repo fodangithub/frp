@@ -172,6 +172,12 @@ type ServerCommonConf struct {
 	// BlacklistRefreshInterval specifies how often to re-fetch the blacklist from URLs, in seconds.
 	// If 0, no automatic refresh occurs. By default, this value is 0.
 	BlacklistRefreshInterval int64 `ini:"blacklist_refresh_interval" json:"blacklist_refresh_interval"`
+	// BlacklistAdditionalFiles specifies a comma-separated list of file paths containing
+	// blacklisted IPs/CIDRs. These files are loaded once at startup and merged into a
+	// static blacklist that is never replaced or overwritten by blacklist_urls refreshes.
+	// The file format is the same as blacklist_urls responses (JSON array or NDJSON).
+	// By default, this value is "".
+	BlacklistAdditionalFiles string `ini:"blacklist_additional_files" json:"blacklist_additional_files"`
 	// UDPPacketSize specifies the UDP packet size
 	// By default, this value is 1500
 	UDPPacketSize int64 `ini:"udp_packet_size" json:"udp_packet_size"`
@@ -220,6 +226,7 @@ func GetDefaultServerConf() ServerCommonConf {
 		BlacklistFilePath:          "",
 		BlacklistURLs:              "",
 		BlacklistRefreshInterval:   0,
+		BlacklistAdditionalFiles:   "",
 	}
 }
 
